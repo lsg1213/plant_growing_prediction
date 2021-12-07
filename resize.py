@@ -8,20 +8,37 @@ import cv2 as cv
 
 from tqdm.std import tqdm
 import shutil
+import argparse
 
+args = argparse.ArgumentParser()
+args.add_argument('--patch', action='store_true')
 
-def main():
+def main(config):
     datapath = '/root/datasets/open'
     resize_shape = (600, 600)
+
+    def resize(img):
+        img = np.stack(map(lambda x: cv.resize(x, dsize=resize_shape, interpolation=cv.INTER_LANCZOS4), img))
+        return img
+
     save_name = f'{resize_shape[0]}x{resize_shape[1]}'
-    for dataset in ['mask_train_dataset', 'train_dataset', 'test_dataset']:
-        img = np.zeros([0] + [*resize_shape] + [3], dtype=np.uint8)
+    for dataset in ['train_dataset', 'test_dataset']:
+        shape = [0] + [*resize_shape] + [3]
+        if config.patch:
+            shape.insert(1, 5)
+        img = np.zeros(shape, dtype=np.uint8)
         mean = None
         std = None
         print(dataset)
-        save_dataset_path = os.path.join(datapath, save_name + '_' + dataset)
+
+        if config.patch:
+            savedataset = 'patch_' + dataset
+        else:
+            savedataset = dataset
+        save_dataset_path = os.path.join(datapath, save_name + '_' + savedataset)
         if not os.path.exists(save_dataset_path):
             os.makedirs(save_dataset_path)
+
         csvdata_path = sorted(glob(os.path.join(datapath, dataset, '*.csv')))
         for csv in csvdata_path:
             shutil.copy2(csv, os.path.join(save_dataset_path, os.path.join(save_dataset_path, os.path.basename(csv))))
@@ -36,7 +53,26 @@ def main():
                 if not os.path.exists(save_folder_path):
                     os.makedirs(save_folder_path)
                 with ThreadPoolExecutor() as pool:
-                    images = list(pool.map(lambda x: cv.resize(np.array(Image.open(x))[:,400:-400], dsize=resize_shape, interpolation=cv.INTER_LANCZOS4), sorted(glob(os.path.join(folder, '*')))))
+                    images = list(pool.map(lambda x: np.array(Image.open(x))[:,400:-400], sorted(glob(os.path.join(folder, '*')))))
+                
+                if config.patch:
+                    def patch(img):
+                        # img (w, h, c)
+                        # return (5, w, h, c)
+                        w, h, _ = img.shape
+                        wsize = w * 1 // 5
+                        hsize = h * 1 // 5
+
+                        return np.stack(
+                                    [img[hsize:4 * hsize, wsize: 4 * wsize],
+                                    img[:3 * hsize, :3 * wsize],
+                                    img[-3 * hsize:, :3 * wsize],
+                                    img[-3 * hsize:, -3 * wsize:],
+                                    img[:3 * hsize, -3 * wsize:]], 0)
+                    images = list(map(patch, images))
+                
+                images = list(map(resize, images))
+                
                 for image in images:
                     if image.shape[-1] == 4:
                         if (image[..., 3] != 255).sum() != 0:
@@ -78,4 +114,4 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    main(args.parse_args())
