@@ -58,7 +58,7 @@ def main(config):
     root_path = os.path.join(datapath, f'{train_size_}train_dataset')
     config.root_path = root_path
 
-    name = f'{config.name}_{config.batch}_{config.lr}'
+    name = f'{config.name}_pretrain_{config.batch}_{config.lr}'
     if config.mask:
         name += '_mask'
     if config.norm:
@@ -174,7 +174,7 @@ def main(config):
                     before3, before4, after3, after4 = model(before_image[..., 1], after_image[..., 1])
                     postives = coss(before1, before2) + coss(before1, before3) + coss(before1, before4) + coss(before2, before3) + coss(before2, before4) + coss(before3, before4) + coss(after1, after2) + coss(after1, after3) + coss(after1, after4) + coss(after2, after3) + coss(after2, after4) + coss(after3, after4)
                     negatives = coss(before1, after1) + coss(before1, after2) + coss(before1, after3) + coss(before1, after4) + coss(before2, after1) + coss(before2, after2) + coss(before2, after3) + coss(before2, after4) + coss(before3, after1) + coss(before3, after2) + coss(before3, after3) + coss(before3, after4) + coss(before4, after1) + coss(before4, after2) + coss(before4, after3) + coss(before4, after4)
-                    train_loss = - torch.log(postives / negatives + 1e-8).mean()
+                    train_loss = - torch.log(torch.exp(postives) / torch.exp(negatives)).mean()
                 else:
                     raise ValueError('--patch unsuported')
                     logit = 0
@@ -202,7 +202,7 @@ def main(config):
                         before3, before4, after3, after4 = model(valid_before[..., 1], valid_after[..., 1])
                         postives = coss(before1, before2) + coss(before1, before3) + coss(before1, before4) + coss(before2, before3) + coss(before2, before4) + coss(before3, before4) + coss(after1, after2) + coss(after1, after3) + coss(after1, after4) + coss(after2, after3) + coss(after2, after4) + coss(after3, after4)
                         negatives = coss(before1, after1) + coss(before1, after2) + coss(before1, after3) + coss(before1, after4) + coss(before2, after1) + coss(before2, after2) + coss(before2, after3) + coss(before2, after4) + coss(before3, after1) + coss(before3, after2) + coss(before3, after3) + coss(before3, after4) + coss(before4, after1) + coss(before4, after2) + coss(before4, after3) + coss(before4, after4)
-                        val_loss = - torch.log(postives / negatives + 1e-8).mean()
+                        valid_loss = - torch.log(torch.exp(postives) / torch.exp(negatives)).mean()
                     else:
                         logit = 0
                         for i in range(valid_before.shape[1]):
