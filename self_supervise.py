@@ -6,6 +6,7 @@ from torch import optim
 from torch import nn
 from torchvision.transforms import ToTensor
 from torchsummary import summary
+from torch.nn.functional import cosine_similarity as coss
 import os
 
 import random
@@ -28,6 +29,7 @@ args.add_argument('--gpus', type=str, default='-1')
 args.add_argument('--norm', type=bool, default=True)
 args.add_argument('--mask', action='store_true')
 args.add_argument('--patch', action='store_true')
+args.add_argument('--self', action='store_true')
 
 
 def seed_everything(seed): # seed 고정
@@ -42,8 +44,9 @@ def seed_everything(seed): # seed 고정
 
 def main(config):
     os.environ['CUDA_VISIBLE_DEVICES'] = config.gpus
-    datapath = '/root/datasets/open'
+    datapath = '/root/datasets/open/old'
     size = config.size
+    config.self = True
     if size is not None:
         size_ = f'{size}x{size}_'
     else:
@@ -167,14 +170,18 @@ def main(config):
                 time_delta = time_delta.to(device)
                 optimizer.zero_grad()
                 if not config.patch:
-                    logit = model(before_image, after_image)
+                    before1, before2, after1, after2 = model(before_image[..., 0], after_image[..., 0])
+                    before3, before4, after3, after4 = model(before_image[..., 1], after_image[..., 1])
+                    postives = coss(before1, before2) + coss(before1, before3) + coss(before1, before4) + coss(before2, before3) + coss(before2, before4) + coss(before3, before4) + coss(after1, after2) + coss(after1, after3) + coss(after1, after4) + coss(after2, after3) + coss(after2, after4) + coss(after3, after4)
+                    negatives = coss(before1, after1) + coss(before1, after2) + coss(before1, after3) + coss(before1, after4) + coss(before2, after1) + coss(before2, after2) + coss(before2, after3) + coss(before2, after4) + coss(before3, after1) + coss(before3, after2) + coss(before3, after3) + coss(before3, after4) + coss(before4, after1) + coss(before4, after2) + coss(before4, after3) + coss(before4, after4)
+                    train_loss = - torch.log(postives / negatives + 1e-8).mean()
                 else:
+                    raise ValueError('--patch unsuported')
                     logit = 0
                     for i in range(before_image.shape[1]):
                         logit += model(before_image[:,i], after_image[:,i])
                     logit /= before_image.shape[1]
 
-                train_loss = torch.sqrt(criterion(logit.squeeze(1).float(), time_delta.float()))
                 train_loss.backward()
                 optimizer.step()
                 lr_schedule.step(epoch + i / iters)
@@ -190,16 +197,18 @@ def main(config):
                     valid_after = valid_after.to(device)
                     valid_time_delta = time_delta.to(device)
 
-
                     if not config.patch:
-                        logit = model(valid_before, valid_after)
+                        before1, before2, after1, after2 = model(valid_before[..., 0], valid_after[..., 0])
+                        before3, before4, after3, after4 = model(valid_before[..., 1], valid_after[..., 1])
+                        postives = coss(before1, before2) + coss(before1, before3) + coss(before1, before4) + coss(before2, before3) + coss(before2, before4) + coss(before3, before4) + coss(after1, after2) + coss(after1, after3) + coss(after1, after4) + coss(after2, after3) + coss(after2, after4) + coss(after3, after4)
+                        negatives = coss(before1, after1) + coss(before1, after2) + coss(before1, after3) + coss(before1, after4) + coss(before2, after1) + coss(before2, after2) + coss(before2, after3) + coss(before2, after4) + coss(before3, after1) + coss(before3, after2) + coss(before3, after3) + coss(before3, after4) + coss(before4, after1) + coss(before4, after2) + coss(before4, after3) + coss(before4, after4)
+                        val_loss = - torch.log(postives / negatives + 1e-8).mean()
                     else:
                         logit = 0
                         for i in range(valid_before.shape[1]):
                             logit += model(valid_before[:,i], valid_after[:,i])
                         logit /= valid_before.shape[1]
 
-                    valid_loss = torch.sqrt(criterion(logit.squeeze(1).float(), valid_time_delta.float()))
                     valid_losses.append(valid_loss.detach().cpu())
                     pbar.set_postfix({'epoch': epoch, 'mode': 'val', 'loss': torch.stack(valid_losses).mean().numpy()})
 
@@ -213,31 +222,6 @@ def main(config):
             best_score = val_loss
             torch.save(checkpoiont, f'{name}.pt')
             patience = 0
-            if epoch >= 3:
-                test_value = []
-                with torch.no_grad():
-                    for test_before, test_after in tqdm(test_data_loader):
-                        test_before = test_before.to(device)
-                        test_after = test_after.to(device)
-                        if not config.patch:
-                            logit = model(test_before, test_after)
-                        else:
-                            logit = 0
-                            for i in range(test_before.shape[1]):
-                                logit += model(test_before[:,i], test_after[:,i])
-                            logit /= test_before.shape[1]
-                        value = logit.squeeze(1).detach().cpu().float()
-                        
-                        test_value.extend(value)
-
-                submission = pd.read_csv(os.path.join(datapath, 'sample_submission.csv'))
-                _sub = torch.FloatTensor(test_value)
-
-                __sub = _sub.numpy()
-                __sub[np.where(__sub<1)] = 1
-
-                submission['time_delta'] = __sub
-                submission.to_csv(f'{name}.csv', index=False)
         else:
             print(f'VALIDATION_LOSS RMSE : {val_loss}', f'\nBEST : {best_score}')
             patience += 1

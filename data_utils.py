@@ -6,6 +6,7 @@ import pandas as pd
 import numpy as np
 import joblib
 import torch
+import os
 
 import random
 from PIL import Image
@@ -128,25 +129,77 @@ def make_combination(length, species, data_frame, direct_name):
     return combination_df
 
 
+def slice_img(img):
+    # img (w, h, c)
+    # return (5, w, h, c)
+    w, h, _ = img.shape
+    wsize = w * 1 // 5
+    hsize = h * 1 // 5
+
+    return torch.stack(
+                [img[hsize:-hsize, wsize:-wsize],
+                img[:3 * hsize, :3 * wsize],
+                img[-3 * hsize:, :3 * wsize],
+                img[-3 * hsize:, -3 * wsize:],
+                img[:3 * hsize, -3 * wsize:]], 0)
+
+
 class KistDataset(Dataset):
-    def __init__(self, combination_df, size, is_test= None):
+    def __init__(self, config, combination_df, size, is_test=None):
         self.combination_df = combination_df
-        self.transform = transforms.Compose([
+        self.config = config
+        try:
+            getattr(self.config, 'self')
+            self.condition = False
+        except:
+            self.condition = True
+        if self.config.norm:
+            ext = joblib.load(os.path.join(self.config.root_path, 'extra.joblib'))
+            self.mean = torch.from_numpy(ext['mean'][0]).type(torch.float32).permute([2,0,1])
+            self.std = torch.from_numpy(ext['std'][0]).type(torch.float32).permute([2,0,1])
+            if self.config.patch:
+                self.mean = self.mean.unsqueeze(0)
+                self.std = self.std.unsqueeze(0)
+            if not self.condition:
+                self.mean = self.mean.unsqueeze(-1)
+                self.std = self.std.unsqueeze(-1)
+            
+        transform_list = [
             transforms.autoaugment.AutoAugment(transforms.autoaugment.AutoAugmentPolicy.IMAGENET)
             # transforms.ToTensor(),
             # transforms.Resize(size)
-        ])
-        # with ThreadPoolExecutor() as pool:
-        #     self.bi = list(pool.map(lambda x: joblib.load(x['before_file_path']), self.combination_df.iloc))
-        # with ThreadPoolExecutor() as pool:
-        #     self.ai = list(pool.map(lambda x: joblib.load(x['after_file_path']), self.combination_df.iloc))
+        ]
+        if self.config.patch:
+            transform_list.insert(0, transforms.Resize(self.config.size, transforms.InterpolationMode.BICUBIC))
+        self.transform = transforms.Compose(transform_list)
         self.is_test = is_test
 
     def __getitem__(self, idx):
         before_image = joblib.load(self.combination_df.iloc[idx]['before_file_path'])
         after_image = joblib.load(self.combination_df.iloc[idx]['after_file_path'])
-        before_image = self.transform(torch.from_numpy(before_image).permute([2,0,1])) / 255.
-        after_image = self.transform(torch.from_numpy(after_image).permute([2,0,1])) / 255.
+        raw_before_image = torch.from_numpy(before_image)
+        raw_after_image = torch.from_numpy(after_image)
+
+        if self.config.patch:
+            before_image = slice_img(raw_before_image)
+            after_image = slice_img(raw_after_image)
+
+            before_image = torch.stack(list(map(self.transform, before_image.permute((0, 3, 1, 2)))), 0)
+            after_image = torch.stack(list(map(self.transform, after_image.permute((0, 3, 1, 2)))), 0)
+        else:
+            before_image = self.transform(raw_before_image.permute([2,0,1]))
+            after_image = self.transform(raw_after_image.permute([2,0,1]))
+            if not self.condition:
+                before_image = torch.stack([before_image, self.transform(raw_before_image.permute([2,0,1]))], -1)
+                after_image = torch.stack([after_image, self.transform(raw_after_image.permute([2,0,1]))], -1)
+
+        if self.config.norm:
+            before_image = (before_image - self.mean) / self.std
+            after_image = (after_image - self.mean) / self.std
+        else:
+            before_image /= 255.
+            after_image /= 255.
+
         
         if self.is_test:
             return before_image, after_image
