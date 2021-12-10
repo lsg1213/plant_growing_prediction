@@ -9,91 +9,18 @@ import torch
 
 import random
 from PIL import Image
-
-
-def extract_day(file_name):
-    day = int(file_name.split('.')[-2][-2:])
-    return day
-
-
-def make_day_array(image_pathes):
-    day_array = np.array([extract_day(file_name) for file_name in image_pathes])
-    return day_array
-
-
-def make_image_path_array(root_path=None):
-    if root_path is None:
-        bc_directories = glob('./BC/*')
-        lt_directories = glob('./LT/*')
-
-    else:
-        bc_directories = glob(root_path + 'BC/*')
-        lt_directories = glob(root_path + 'LT/*')
-
-    bc_image_path = []
-    for bc_path in bc_directories:
-        images = glob(bc_path + '/*.png')
-        bc_image_path.extend(images)
-
-    lt_image_path = []
-    for lt_path in lt_directories:
-        images = glob(lt_path + '/*.png')
-        lt_image_path.extend(images)
-
-    return bc_image_path, lt_image_path
-
-
-def make_dataframe(root_path=None):
-    bc_image_path, lt_image_path = make_image_path_array(root_path)
-    bc_day_array = make_day_array(bc_image_path)
-    lt_day_array = make_day_array(lt_image_path)
-
-    bc_df = pd.DataFrame({'file_name': bc_image_path,
-                          'day': bc_day_array})
-    bc_df['species'] = 'bc'
-
-    lt_df = pd.DataFrame({'file_name': lt_image_path,
-                          'day': lt_day_array})
-    lt_df['species'] = 'lt'
-
-    total_data_frame = pd.concat([bc_df, lt_df]).reset_index(drop=True)
-
-    return total_data_frame
-
-
-def make_combination(length, species, data_frame):
-    before_file_path = []
-    after_file_path = []
-    time_delta = []
-
-    for i in range(length):
-        sample = data_frame[data_frame['species'] == species].sample(2)
-        after = sample[sample['day'] == max(sample['day'])].reset_index(drop=True)
-        before = sample[sample['day'] == min(sample['day'])].reset_index(drop=True)
-
-        before_file_path.append(before.iloc[0]['file_name'])
-        after_file_path.append(after.iloc[0]['file_name'])
-        delta = int(after.iloc[0]['day'] - before.iloc[0]['day'])
-        time_delta.append(delta)
-
-    combination_df = pd.DataFrame({
-        'before_file_path': before_file_path,
-        'after_file_path': after_file_path,
-        'time_delta': time_delta,
-    })
-
-    combination_df['species'] = species
-
-    return combination_df
+import torchvision
 
 
 def extract_day(images):
     day = int(images.split('.')[-2][-2:])
     return day
 
+
 def make_day_array(images):
     day_array = np.array([extract_day(x) for x in images])
     return day_array
+
 
 def make_combination(length, species, data_frame, direct_name):
     before_file_path = []
@@ -128,27 +55,83 @@ def make_combination(length, species, data_frame, direct_name):
     return combination_df
 
 
+def data_preprocess(config):
+# BC 폴더와 LT 폴더에 있는 하위 폴더를 저장한다.
+    bc_direct = glob(config.root_path + '/BC/*')
+    bc_direct_name = [x[-5:] for x in bc_direct]
+    lt_direct = glob(config.root_path + '/LT/*')
+    lt_direct_name = [x[-5:] for x in lt_direct]
+
+    # 하위 폴더에 있는 이미지들을 하위 폴더 이름과 매칭시켜서 저장한다.
+    bc_images = {key : glob(name + '/*.joblib') for key,name in zip(bc_direct_name, bc_direct)}
+    lt_images = {key : glob(name + '/*.joblib') for key,name in zip(lt_direct_name, lt_direct)}
+
+    # 하위 폴더에 있는 이미지들에서 날짜 정보만 따로 저장한다.
+    bc_dayes = {key : make_day_array(bc_images[key]) for key in bc_direct_name}
+    lt_dayes = {key : make_day_array(lt_images[key]) for key in lt_direct_name}
+
+    bc_dfs = []
+    for i in bc_direct_name:
+        bc_df = pd.DataFrame({
+            'file_name':bc_images[i],
+            'day':bc_dayes[i],
+            'species':'bc',
+            'version':i
+        })
+        bc_dfs.append(bc_df)
+        
+    lt_dfs = []
+    for i in lt_direct_name:
+        lt_df = pd.DataFrame({
+            'file_name':lt_images[i],
+            'day':lt_dayes[i],
+            'species':'lt',
+            'version':i
+        })
+        lt_dfs.append(lt_df)
+
+    bc_dataframe = pd.concat(bc_dfs).reset_index(drop=True)
+    lt_dataframe = pd.concat(lt_dfs).reset_index(drop=True)
+    total_dataframe = pd.concat([bc_dataframe, lt_dataframe]).reset_index(drop=True)
+
+    bc_combination = make_combination(5000, 'bc', total_dataframe, bc_direct_name)
+    lt_combination = make_combination(5000, 'lt', total_dataframe, lt_direct_name)
+
+    bc_train = bc_combination.iloc[:4500]
+    bc_valid = bc_combination.iloc[4500:]
+
+    lt_train = lt_combination.iloc[:4500]
+    lt_valid = lt_combination.iloc[4500:]
+
+    train_set = pd.concat([bc_train, lt_train])
+    valid_set = pd.concat([bc_valid, lt_valid])
+
+    train_dataset = KistDataset(train_set, config, mode='train')
+    valid_dataset = KistDataset(valid_set, config, mode='val')
+    return train_dataset, valid_dataset
+
+
 class KistDataset(Dataset):
-    def __init__(self, combination_df, size, is_test= None):
+    def __init__(self, combination_df, config, mode='train'):
         self.combination_df = combination_df
-        self.transform = transforms.Compose([
-            transforms.autoaugment.AutoAugment(transforms.autoaugment.AutoAugmentPolicy.IMAGENET)
-            # transforms.ToTensor(),
-            # transforms.Resize(size)
-        ])
-        # with ThreadPoolExecutor() as pool:
-        #     self.bi = list(pool.map(lambda x: joblib.load(x['before_file_path']), self.combination_df.iloc))
-        # with ThreadPoolExecutor() as pool:
-        #     self.ai = list(pool.map(lambda x: joblib.load(x['after_file_path']), self.combination_df.iloc))
-        self.is_test = is_test
+
+        transform_list = []
+        self.mode = mode
+
+        if self.mode == 'train':
+            transform_list.append(transforms.autoaugment.AutoAugment(transforms.AutoAugmentPolicy.IMAGENET))
+        # transform_list.append(transforms.ToTensor())
+        self.transform = transforms.Compose(transform_list)
 
     def __getitem__(self, idx):
-        before_image = joblib.load(self.combination_df.iloc[idx]['before_file_path'])
-        after_image = joblib.load(self.combination_df.iloc[idx]['after_file_path'])
-        before_image = self.transform(torch.from_numpy(before_image).permute([2,0,1])) / 255.
-        after_image = self.transform(torch.from_numpy(after_image).permute([2,0,1])) / 255.
-        
-        if self.is_test:
+        before_image = torch.from_numpy(joblib.load(self.combination_df.iloc[idx]['before_file_path']))
+        after_image = torch.from_numpy(joblib.load(self.combination_df.iloc[idx]['after_file_path']))
+
+        before_image = before_image.permute([2,0,1])
+        after_image = after_image.permute([2,0,1])
+        before_image = self.transform(before_image) / 255.
+        after_image = self.transform(after_image) / 255.
+        if self.mode == 'test':
             return before_image, after_image
         time_delta = self.combination_df.iloc[idx]['time_delta']
         return before_image, after_image, time_delta

@@ -45,22 +45,6 @@ class CompareNet(nn.Module):
         after1 = self.after_net(after_input)
         before2 = self.after_net(before_input)
         after2 = self.before_net(after_input)
-        # after = self.before_net(after_input)
-
-        # before = self.fc11(before)
-        # before = self.bc11(before)
-        # before = self.swish(before)
-        # before = self.fc12(before)
-        # before = self.bc12(before)
-        # before = self.swish(before)
-
-        
-        # after = self.fc21(after)  
-        # after = self.bc21(after)
-        # after = self.swish(after)
-        # after = self.fc22(after)
-        # after = self.bc22(after)
-        # after = self.swish(after)
 
         before = self.final_fc1(torch.cat([before1, before2], -1))
         after = self.final_fc2(torch.cat([after1, after2], -1))
