@@ -17,16 +17,35 @@ class CompareCNN(nn.Module):
         return output
 
 
+def replace_batchnorm2groupnorm(net):
+    if len([i for i in net.named_children()]) != 0:
+        for name, child in net.named_children():
+            if 'bn' in name:
+                layer = getattr(net, name)
+                chan = layer.num_features
+                setattr(net, name, torch.nn.GroupNorm(4, chan))
+
+            replace_batchnorm2groupnorm(child)
+
+
 class CompareNet(nn.Module):
 
     def __init__(self, config):
         super(CompareNet, self).__init__()
         model_num = int(config.name.split('_')[0][1:])
+        self.config = config
         self.before_net = EfficientNet.from_pretrained(f'efficientnet-b{model_num}')
         self.after_net = EfficientNet.from_pretrained(f'efficientnet-b{model_num}')
-        
+
+        replace_batchnorm2groupnorm(self.before_net)
+        replace_batchnorm2groupnorm(self.after_net)
         self.final_fc1 = nn.Linear(2000, 1)
         self.final_fc2 = nn.Linear(2000, 1)
+        try:
+            getattr(self.config, 'self')
+            self.condition = False
+        except:
+            self.condition = True
         # self.final_fc1 = nn.Linear(256, 1)
         # self.final_fc2 = nn.Linear(256, 1)
 
