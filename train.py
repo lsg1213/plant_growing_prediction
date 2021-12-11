@@ -21,9 +21,10 @@ import os
 
 
 def test_iter(model, config, epoch=None, device=torch.device('cpu')):
-    test_set = pd.read_csv(os.path.join(config.datapath, f'{config.size}x{config.size}_test_dataset/test_data.csv'))
-    test_set['l_root'] = test_set['before_file_path'].map(lambda x: os.path.join(config.datapath, f'{config.size}x{config.size}_test_dataset/') + x.split('_')[1] + '/' + x.split('_')[2])
-    test_set['r_root'] = test_set['after_file_path'].map(lambda x: os.path.join(config.datapath, f'{config.size}x{config.size}_test_dataset/') + x.split('_')[1] + '/' + x.split('_')[2])
+    prefix = f'{config.size}x{config.size}_' if config.size is not None else 'joblib_'
+    test_set = pd.read_csv(os.path.join(config.datapath, f'{prefix}test_dataset/test_data.csv'))
+    test_set['l_root'] = test_set['before_file_path'].map(lambda x: os.path.join(config.datapath, f'{prefix}test_dataset/') + x.split('_')[1] + '/' + x.split('_')[2])
+    test_set['r_root'] = test_set['after_file_path'].map(lambda x: os.path.join(config.datapath, f'{prefix}test_dataset/') + x.split('_')[1] + '/' + x.split('_')[2])
     test_set['l_path'] = test_set['l_root'] + '/' + test_set['before_file_path'] + '.joblib'
     test_set['r_path'] = test_set['r_root'] + '/' + test_set['after_file_path'] + '.joblib'
     test_set['before_file_path'] = test_set['l_path']
@@ -64,7 +65,14 @@ def iteration(config, epoch, model, pbar, criterion, mode='train', optimizer: to
         after_image = after_image.to(device)
         time_delta = time_delta.to(device)
 
-        logit = model(before_image, after_image)
+        if not config.patch:
+            logit = model(before_image, after_image)
+        else:
+            logit = 0
+            batch = before_image.shape[0]
+            shape = [*before_image.shape[2:]]
+            logit = model(before_image.reshape([-1] + shape), after_image.reshape([-1] + shape))
+            logit = logit.reshape([batch, -1] + [1]).mean(1)
         loss = torch.sqrt(criterion(logit.squeeze(1).float(), time_delta.float()))
 
         if mode == 'train':
@@ -84,10 +92,14 @@ def main(config):
     os.environ['CUDA_VISIBLE_DEVICES'] = config.gpus
     # 학습 데이터가 있는 폴더 위치
     size = config.size
+    # if config.patch:
+    #     size = None
     if size is not None:
         size_ = f'{size}x{size}_'
+        if config.patch:
+            size_ += 'patch_'
     else:
-        size_ = ''
+        size_ = 'joblib_'
     if config.mask:
         train_size_ = size_ + 'mask_'
     else:
@@ -134,12 +146,16 @@ def main(config):
     if config.resume:
         resume = torch.load(f'{name}.pt')
         model.load_state_dict(resume['model'])
-        initial_epoch = resume['epoch']
-        optimizer.load_state_dict(resume['opt'])
-        patience = resume['patience']
-        decay.load_state_dict(resume['decay'])
+        try:
+            initial_epoch = resume['epoch']
+            optimizer.load_state_dict(resume['opt'])
+            patience = resume['patience']
+            decay.load_state_dict(resume['decay'])
+            best_score = resume['best_score']
+        except:
+            print('Warning: have some problems to resume')
 
-    for epoch in tqdm(range(initial_epoch, config.epoch)):
+    for epoch in range(initial_epoch, config.epoch):
         if patience == max_patience:
             print('Early stopping')
             break
@@ -153,7 +169,7 @@ def main(config):
         with torch.no_grad():
             with tqdm(valid_data_loader) as pbar:
                 val_losses = iteration(config, epoch, model, pbar, criterion, mode='val', device=device)
-
+        decay.step(val_losses)
         
         if val_losses < best_score:
             best_score = val_losses
@@ -162,16 +178,19 @@ def main(config):
                 'epoch': epoch,
                 'opt': optimizer.state_dict(),
                 'patience': patience,
-                'decay': decay.state_dict()
+                'decay': decay.state_dict(),
+                'best_score': best_score
             }
             torch.save(checkpoiont, f'{name}.pt')
             patience = 0
             if epoch >= 3:
                 with torch.no_grad():
                     test_iter(model, config, epoch)
+        else:
+            patience += 1
     
     if config.epoch == 0:
-        # model.load_state_dict(torch.load(f'{name}.pt')['model'])
+        model.load_state_dict(torch.load(f'{name}.pt')['model'])
         test_iter(model, config, device=device)
 
 

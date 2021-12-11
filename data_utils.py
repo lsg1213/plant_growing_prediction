@@ -112,12 +112,28 @@ def data_preprocess(config):
     return train_dataset, valid_dataset
 
 
+def slice_img(img):
+    # img (w, h, c)
+    # return (5, w, h, c)
+    w, h, _ = img.shape
+    wsize = w * 1 // 5
+    hsize = h * 1 // 5
+
+    return torch.stack(
+                [img[hsize:4 * hsize, wsize: 4 * wsize],
+                img[:3 * hsize, :3 * wsize],
+                img[-3 * hsize:, :3 * wsize],
+                img[-3 * hsize:, -3 * wsize:],
+                img[:3 * hsize, -3 * wsize:]], 0)
+
+
 class KistDataset(Dataset):
     def __init__(self, combination_df, config, mode='train'):
         self.combination_df = combination_df
 
         transform_list = []
         self.mode = mode
+        self.config = config
 
         if self.mode == 'train':
             transform_list.append(transforms.autoaugment.AutoAugment(transforms.AutoAugmentPolicy.IMAGENET))
@@ -128,8 +144,16 @@ class KistDataset(Dataset):
         before_image = torch.from_numpy(joblib.load(self.combination_df.iloc[idx]['before_file_path']))
         after_image = torch.from_numpy(joblib.load(self.combination_df.iloc[idx]['after_file_path']))
 
-        before_image = before_image.permute([2,0,1])
-        after_image = after_image.permute([2,0,1])
+        if self.config.patch:
+            # before_image = slice_img(before_image)
+            # after_image = slice_img(after_image)
+            before_image = before_image.permute([0,3,1,2])
+            after_image = after_image.permute([0,3,1,2])
+            before_image = torch.stack(list(map(self.transform, before_image)))
+            after_image = torch.stack(list(map(self.transform, after_image)))
+        else:
+            before_image = before_image.permute([2,0,1])
+            after_image = after_image.permute([2,0,1])
         before_image = self.transform(before_image) / 255.
         after_image = self.transform(after_image) / 255.
         if self.mode == 'test':

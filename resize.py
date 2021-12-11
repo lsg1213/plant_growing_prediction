@@ -16,17 +16,20 @@ args.add_argument('--patch', action='store_true')
 def main(config):
     datapath = '/root/datasets/open'
     resize_shape = (600, 600)
+    # resize_shape = None
 
     def resize(img):
         img = np.stack(map(lambda x: cv.resize(x, dsize=resize_shape, interpolation=cv.INTER_LANCZOS4), img))
         return img
 
-    save_name = f'{resize_shape[0]}x{resize_shape[1]}'
+    save_name = f'{resize_shape[0]}x{resize_shape[1]}' if resize_shape is not None else 'joblib'
+    resizing = resize_shape != None
     for dataset in ['train_dataset', 'test_dataset']:
-        shape = [0] + [*resize_shape] + [3]
-        if config.patch:
-            shape.insert(1, 5)
-        img = np.zeros(shape, dtype=np.uint8)
+        if resize_shape is not None:
+            shape = [0] + [*resize_shape] + [3]
+            if config.patch:
+                shape.insert(1, 5)
+            img = np.zeros(shape, dtype=np.uint8)
         mean = None
         std = None
         print(dataset)
@@ -70,8 +73,8 @@ def main(config):
                                     img[-3 * hsize:, -3 * wsize:],
                                     img[:3 * hsize, -3 * wsize:]], 0)
                     images = list(map(patch, images))
-                
-                images = list(map(resize, images))
+                if resizing:
+                    images = list(map(resize, images))
                 
                 for image in images:
                     if image.shape[-1] == 4:

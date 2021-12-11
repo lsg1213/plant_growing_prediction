@@ -37,8 +37,8 @@ class CompareNet(nn.Module):
         self.before_net = EfficientNet.from_pretrained(f'efficientnet-b{model_num}')
         self.after_net = EfficientNet.from_pretrained(f'efficientnet-b{model_num}')
 
-        replace_batchnorm2groupnorm(self.before_net)
-        replace_batchnorm2groupnorm(self.after_net)
+        # replace_batchnorm2groupnorm(self.before_net)
+        # replace_batchnorm2groupnorm(self.after_net)
         self.final_fc1 = nn.Linear(2000, 1)
         self.final_fc2 = nn.Linear(2000, 1)
         try:
